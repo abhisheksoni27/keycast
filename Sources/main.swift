@@ -1,4 +1,5 @@
 import Cocoa
+import ApplicationServices
 
 // MARK: - Menu Bar Vector Icon
 func createMenuBarKeycastIcon() -> NSImage {
@@ -8,13 +9,11 @@ func createMenuBarKeycastIcon() -> NSImage {
         ctx.setStrokeColor(NSColor.black.cgColor)
         ctx.setLineWidth(1.3)
         
-        // Keycap square
         let keyRect = CGRect(x: 2.5, y: 2.5, width: 13, height: 13)
         let keyPath = CGPath(roundedRect: keyRect, cornerWidth: 3, cornerHeight: 3, transform: nil)
         ctx.addPath(keyPath)
         ctx.strokePath()
         
-        // Command symbol or dot
         ctx.setLineWidth(1.1)
         ctx.move(to: CGPoint(x: 6.5, y: 9))
         ctx.addLine(to: CGPoint(x: 11.5, y: 9))
@@ -32,7 +31,7 @@ class KeyHUDWindow: NSWindow {
     
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 50),
+            contentRect: NSRect(x: 0, y: 0, width: 260, height: 56),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -44,22 +43,19 @@ class KeyHUDWindow: NSWindow {
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         self.hasShadow = true
         
-        // Visual Effect View (Frosted Glass Dark Pill)
-        let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 220, height: 50))
+        let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 260, height: 56))
         visualEffect.material = .hudWindow
         visualEffect.state = .active
         visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 14
+        visualEffect.layer?.cornerRadius = 16
         visualEffect.layer?.masksToBounds = true
-        
-        // Border ring
-        visualEffect.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
+        visualEffect.layer?.borderColor = NSColor(white: 1.0, alpha: 0.22).cgColor
         visualEffect.layer?.borderWidth = 1.0
         
         label.frame = visualEffect.bounds
         label.alignment = .center
-        label.font = NSFont.monospacedSystemFont(ofSize: 18, weight: .semibold)
-        label.textColor = NSColor(white: 0.95, alpha: 1.0)
+        label.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .bold)
+        label.textColor = NSColor(white: 0.96, alpha: 1.0)
         visualEffect.addSubview(label)
         
         self.contentView = visualEffect
@@ -69,8 +65,8 @@ class KeyHUDWindow: NSWindow {
     func reposition() {
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
-            let x = screenFrame.midX - 110
-            let y = screenFrame.minY + 60 // Float 60px from bottom dock
+            let x = screenFrame.midX - 130
+            let y = screenFrame.minY + 60
             self.setFrameOrigin(NSPoint(x: x, y: y))
         }
     }
@@ -82,10 +78,9 @@ class KeyHUDWindow: NSWindow {
         self.alphaValue = 1.0
         self.orderFrontRegardless()
         
-        // Fade out after 1.8 seconds of inactivity
         fadeTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: false) { [weak self] _ in
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.4
+                context.duration = 0.35
                 self?.animator().alphaValue = 0.0
             }, completionHandler: {
                 self?.orderOut(nil)
@@ -99,7 +94,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var hudWindow: KeyHUDWindow!
     var eventMonitor: Any?
-    var onlyShortcuts: Bool = true
+    var onlyShortcuts: Bool = false // Default to showing all keystrokes for instant visual feedback!
+    var permissionTimer: Timer?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -107,12 +103,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         hudWindow = KeyHUDWindow()
         buildMenu()
-        startKeyMonitor()
+        
+        // Show launch test greeting HUD
+        hudWindow.displayKeyCombination("KeyCast Ready ⌨️")
+        
+        checkAccessibilityPermission()
+    }
+    
+    func checkAccessibilityPermission() {
+        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+        let isTrusted = AXIsProcessTrustedWithOptions(options)
+        
+        if isTrusted {
+            startKeyMonitor()
+        } else {
+            // Poll until user enables it in System Settings
+            hudWindow.displayKeyCombination("Grant Accessibility ⚠️")
+            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+                if AXIsProcessTrusted() {
+                    timer.invalidate()
+                    self?.hudWindow.displayKeyCombination("Access Granted! ✨")
+                    self?.startKeyMonitor()
+                    self?.buildMenu()
+                }
+            }
+        }
     }
     
     func buildMenu() {
         let menu = NSMenu()
-        let modeItem = NSMenuItem(title: onlyShortcuts ? "Mode: Shortcuts Only (⌘/⌥/⌃)" : "Mode: All Keystrokes", action: #selector(toggleMode), keyEquivalent: "")
+        
+        let isTrusted = AXIsProcessTrusted()
+        let permStatus = isTrusted ? "Accessibility: Granted ✅" : "Accessibility: Click to Grant ⚠️"
+        let permItem = NSMenuItem(title: permStatus, action: #selector(openAccessibilitySettings), keyEquivalent: "")
+        permItem.target = self
+        menu.addItem(permItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        let testItem = NSMenuItem(title: "Test HUD Display", action: #selector(testHUD), keyEquivalent: "t")
+        testItem.target = self
+        menu.addItem(testItem)
+        
+        let modeTitle = onlyShortcuts ? "Mode: Shortcuts Only (⌘/⌥/⌃)" : "Mode: All Keystrokes (Letters + Keys)"
+        let modeItem = NSMenuItem(title: modeTitle, action: #selector(toggleMode), keyEquivalent: "")
         modeItem.target = self
         menu.addItem(modeItem)
         
@@ -121,13 +155,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
     
+    @objc func testHUD() {
+        hudWindow.displayKeyCombination("⌘ + ⇧ + K")
+    }
+    
+    @objc func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    
     @objc func toggleMode() {
         onlyShortcuts.toggle()
         buildMenu()
+        hudWindow.displayKeyCombination(onlyShortcuts ? "Shortcuts Only" : "All Keystrokes")
     }
     
     func startKeyMonitor() {
-        // Monitors key events globally across the system
+        guard eventMonitor == nil else { return }
+        
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self else { return }
             
@@ -141,8 +187,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             
-            let chars = event.charactersIgnoringModifiers?.uppercased() ?? ""
-            let combo = "\(mods)\(chars)".trimmingCharacters(in: .whitespaces)
+            var keyStr = ""
+            switch event.keyCode {
+            case 36: keyStr = "⏎ Return"
+            case 48: keyStr = "⇥ Tab"
+            case 49: keyStr = "␣ Space"
+            case 51: keyStr = "⌫ Delete"
+            case 53: keyStr = "⎋ Esc"
+            case 123: keyStr = "←"
+            case 124: keyStr = "→"
+            case 125: keyStr = "↓"
+            case 126: keyStr = "↑"
+            default:
+                keyStr = event.charactersIgnoringModifiers?.uppercased() ?? ""
+            }
+            
+            let combo = "\(mods)\(keyStr)".trimmingCharacters(in: .whitespaces)
             if !combo.isEmpty {
                 DispatchQueue.main.async {
                     self.hudWindow.displayKeyCombination(combo)
